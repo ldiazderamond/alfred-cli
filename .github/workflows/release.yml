@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            binary_name: alfred-cli-linux-amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            binary_name: alfred-cli-linux-arm64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            binary_name: alfred-cli-darwin-amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            binary_name: alfred-cli-darwin-arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            binary_name: alfred-cli-windows-amd64.exe
+          - os: windows-latest
+            goos: windows
+            goarch: arm64
+            binary_name: alfred-cli-windows-arm64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Get version from tag
+        id: get_version
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION=${VERSION#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+          echo "Tag: ${GITHUB_REF#refs/tags/}"
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: ${{ matrix.goos == 'linux' && '0' || '' }}
+          VERSION: ${{ steps.get_version.outputs.version }}
+          TAG: ${{ steps.get_version.outputs.tag }}
+          COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go build -ldflags "-s -w -X 'main.version=${VERSION}' -X 'main.commit=${COMMIT:0:7}' -X 'main.date=${DATE}'" -o ${{ matrix.binary_name }} .
+          if [ "${{ matrix.goos }}" != "windows" ]; then
+            chmod +x ${{ matrix.binary_name }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary_name }}
+          path: ${{ matrix.binary_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Prepare release files
+        run: |
+          # Flatten the directory structure - artifacts are in subdirectories
+          mkdir -p release
+          find dist -type f -name "alfred-cli-*" -exec cp {} release/ \;
+          ls -lh release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
